@@ -1,12 +1,23 @@
+/*******************************************************************************
+ * Copyright (c) 2015 QNX Software Systems and others.
+ * All rights reserved. This program and the accompanying materials
+ * are made available under the terms of the Eclipse Public License v1.0
+ * which accompanies this distribution, and is available at
+ * http://www.eclipse.org/legal/epl-v10.html
+ *******************************************************************************/
 package org.eclipse.cdt.arduino.ui.internal.remote;
 
 import java.io.IOException;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
 
-import org.eclipse.cdt.arduino.core.Board;
-import org.eclipse.cdt.arduino.core.IArduinoBoardManager;
+import org.eclipse.cdt.arduino.core.internal.board.ArduinoBoard;
+import org.eclipse.cdt.arduino.core.internal.board.ArduinoManager;
 import org.eclipse.cdt.arduino.ui.internal.Activator;
 import org.eclipse.cdt.arduino.ui.internal.Messages;
 import org.eclipse.cdt.serial.SerialPort;
+import org.eclipse.core.runtime.CoreException;
 import org.eclipse.jface.wizard.WizardPage;
 import org.eclipse.swt.SWT;
 import org.eclipse.swt.events.KeyEvent;
@@ -29,8 +40,8 @@ public class NewArduinoTargetWizardPage extends WizardPage {
 	private String[] portNames;
 	private Combo portCombo;
 
-	Board board;
-	private Board[] boards;
+	ArduinoBoard board;
+	private ArduinoBoard[] boards;
 	private Combo boardCombo;
 
 	public NewArduinoTargetWizardPage() {
@@ -83,18 +94,28 @@ public class NewArduinoTargetWizardPage extends WizardPage {
 			}
 		});
 
-		IArduinoBoardManager boardManager = Activator.getService(IArduinoBoardManager.class);
-
 		Label boardLabel = new Label(comp, SWT.NONE);
 		boardLabel.setText(Messages.NewArduinoTargetWizardPage_5);
 
 		boardCombo = new Combo(comp, SWT.READ_ONLY);
 		boardCombo.setLayoutData(new GridData(GridData.FILL_HORIZONTAL));
-		boards = boardManager.getBoards().toArray(new Board[0]);
-		for (Board board : boards) {
-			boardCombo.add(board.getName());
+		try {
+			List<ArduinoBoard> boardList = ArduinoManager.instance.getInstalledBoards();
+			Collections.sort(boardList, new Comparator<ArduinoBoard>() {
+				@Override
+				public int compare(ArduinoBoard o1, ArduinoBoard o2) {
+					return o1.getName().compareTo(o2.getName());
+				}
+			});
+			boards = boardList.toArray(new ArduinoBoard[0]);
+
+			for (ArduinoBoard board : boards) {
+				boardCombo.add(board.getName());
+			}
+			boardCombo.select(0);
+		} catch (CoreException e) {
+			Activator.log(e);
 		}
-		boardCombo.select(0);
 		boardCombo.addSelectionListener(new SelectionAdapter() {
 			@Override
 			public void widgetSelected(SelectionEvent e) {

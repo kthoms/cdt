@@ -7226,6 +7226,20 @@ public class AST2TemplateTests extends AST2TestBase {
 	public void testAliasTemplate_416280_2() throws Exception {
 		parseAndCheckBindings();
 	}
+	
+	//	template <typename T>
+	//	struct Struct {};
+	//
+	//	template <typename T> using Alias = Struct<T>;
+	//
+	//	void waldo(Struct<int>);
+	//
+	//	int main() {
+	//	    waldo(Alias<int>());
+	//	}
+	public void testTemplateIdNamingAliasTemplateInExpression_472615() throws Exception {
+		parseAndCheckBindings();
+	}
 
 	//	template<typename U>
 	//	struct A {
@@ -7997,6 +8011,41 @@ public class AST2TemplateTests extends AST2TestBase {
     	parseAndCheckBindings();
     }
 
+	//	struct S {
+	//		int foo;
+	//	};
+	//
+	//	template <typename T>
+	//	auto bar(T t) -> decltype(t->foo);
+	//	
+	//	int main() {
+	//		S s;
+	//		auto waldo = bar(&s);
+	//	}
+	public void testDependentFieldReference_472436a() throws Exception {
+		BindingAssertionHelper helper = getAssertionHelper();
+		helper.assertVariableType("waldo", CommonCPPTypes.int_);    	
+	}
+    
+	//	struct T {
+	//		int foo;
+	//	};
+	//	struct S {
+	//		T* other;
+	//	};
+	//
+	//	template <typename T>
+	//	auto bar(T t) -> decltype(t->other->foo);
+	//	
+	//	int main() {
+	//		S s;
+	//		auto waldo = bar(&s);
+	//	}
+	public void testDependentFieldReference_472436b() throws Exception {
+		BindingAssertionHelper helper = getAssertionHelper();
+		helper.assertVariableType("waldo", CommonCPPTypes.int_);    	
+	}
+	
 	//	template <typename>
 	//	struct Bind {};
 	//	template <typename Func, typename ... BoundArgs>
@@ -8814,6 +8863,24 @@ public class AST2TemplateTests extends AST2TestBase {
 	//	  };
 	//	};
 	public void testAmbiguityResolutionOrder_462348b() throws Exception {
+		parseAndCheckBindings();
+	}
+	
+	//	template <typename>
+	//	struct Base {
+	//	    template <typename>
+	//	    void method(int);
+	//	};
+	//
+	//	template <typename V>
+	//	struct C : Base<V> {
+	//	  typedef int WALDO;
+	//
+	//	  C() {
+	//	    this->template method<WALDO>(0);    
+	//	  }
+	//	};
+	public void testRegression_421823() throws Exception {
 		parseAndCheckBindings();
 	}
 }

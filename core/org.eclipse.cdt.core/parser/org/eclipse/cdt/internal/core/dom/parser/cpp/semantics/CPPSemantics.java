@@ -14,10 +14,12 @@
  *     Mike Kucera (IBM)
  *     Thomas Corbat (IFS)
  *     Nathan Ridge
+ *     Richard Eames
  *******************************************************************************/
 package org.eclipse.cdt.internal.core.dom.parser.cpp.semantics;
 
 import static org.eclipse.cdt.core.dom.ast.IASTExpression.ValueCategory.LVALUE;
+import static org.eclipse.cdt.core.dom.ast.IASTExpression.ValueCategory.PRVALUE;
 import static org.eclipse.cdt.internal.core.dom.parser.cpp.semantics.SemanticUtil.ALLCVQ;
 import static org.eclipse.cdt.internal.core.dom.parser.cpp.semantics.SemanticUtil.ARRAY;
 import static org.eclipse.cdt.internal.core.dom.parser.cpp.semantics.SemanticUtil.CVTYPE;
@@ -83,12 +85,12 @@ import org.eclipse.cdt.core.dom.ast.IASTTypeId;
 import org.eclipse.cdt.core.dom.ast.IASTTypeIdExpression;
 import org.eclipse.cdt.core.dom.ast.IASTTypeIdInitializerExpression;
 import org.eclipse.cdt.core.dom.ast.IASTUnaryExpression;
+import org.eclipse.cdt.core.dom.ast.IBasicType;
 import org.eclipse.cdt.core.dom.ast.IBasicType.Kind;
 import org.eclipse.cdt.core.dom.ast.IBinding;
 import org.eclipse.cdt.core.dom.ast.ICompositeType;
 import org.eclipse.cdt.core.dom.ast.IEnumeration;
 import org.eclipse.cdt.core.dom.ast.IEnumerator;
-import org.eclipse.cdt.core.dom.ast.IField;
 import org.eclipse.cdt.core.dom.ast.IFunction;
 import org.eclipse.cdt.core.dom.ast.IFunctionType;
 import org.eclipse.cdt.core.dom.ast.IPointerType;
@@ -151,6 +153,7 @@ import org.eclipse.cdt.core.dom.ast.cpp.ICPPClassType;
 import org.eclipse.cdt.core.dom.ast.cpp.ICPPConstructor;
 import org.eclipse.cdt.core.dom.ast.cpp.ICPPField;
 import org.eclipse.cdt.core.dom.ast.cpp.ICPPFunction;
+import org.eclipse.cdt.core.dom.ast.cpp.ICPPFunctionInstance;
 import org.eclipse.cdt.core.dom.ast.cpp.ICPPFunctionTemplate;
 import org.eclipse.cdt.core.dom.ast.cpp.ICPPFunctionType;
 import org.eclipse.cdt.core.dom.ast.cpp.ICPPMember;
@@ -195,6 +198,7 @@ import org.eclipse.cdt.internal.core.dom.parser.IRecursionResolvingBinding;
 import org.eclipse.cdt.internal.core.dom.parser.ProblemBinding;
 import org.eclipse.cdt.internal.core.dom.parser.Value;
 import org.eclipse.cdt.internal.core.dom.parser.cpp.CPPASTIdExpression;
+import org.eclipse.cdt.internal.core.dom.parser.cpp.CPPASTLiteralExpression;
 import org.eclipse.cdt.internal.core.dom.parser.cpp.CPPASTName;
 import org.eclipse.cdt.internal.core.dom.parser.cpp.CPPASTNameBase;
 import org.eclipse.cdt.internal.core.dom.parser.cpp.CPPASTTranslationUnit;
@@ -206,10 +210,13 @@ import org.eclipse.cdt.internal.core.dom.parser.cpp.CPPFunctionType;
 import org.eclipse.cdt.internal.core.dom.parser.cpp.CPPImplicitFunction;
 import org.eclipse.cdt.internal.core.dom.parser.cpp.CPPNamespace;
 import org.eclipse.cdt.internal.core.dom.parser.cpp.CPPNamespaceScope;
+import org.eclipse.cdt.internal.core.dom.parser.cpp.CPPPointerType;
 import org.eclipse.cdt.internal.core.dom.parser.cpp.CPPReferenceType;
 import org.eclipse.cdt.internal.core.dom.parser.cpp.CPPScope;
+import org.eclipse.cdt.internal.core.dom.parser.cpp.CPPTemplateNonTypeArgument;
 import org.eclipse.cdt.internal.core.dom.parser.cpp.CPPTemplateParameterMap;
 import org.eclipse.cdt.internal.core.dom.parser.cpp.CPPUnknownConstructor;
+import org.eclipse.cdt.internal.core.dom.parser.cpp.CPPUnknownField;
 import org.eclipse.cdt.internal.core.dom.parser.cpp.CPPUnknownMemberClass;
 import org.eclipse.cdt.internal.core.dom.parser.cpp.CPPUnknownMethod;
 import org.eclipse.cdt.internal.core.dom.parser.cpp.CPPUsingDeclaration;
@@ -456,7 +463,7 @@ public class CPPSemantics {
 					} else {
 						// Do not interpret template arguments to a template class as being
 						// explicit template arguments to its templated constructor.
-						data.fTemplateArguments = null;
+						data.setTemplateArguments(null);
 						binding= CPPSemantics.resolveFunction(data, ClassTypeHelper.getConstructors(cls, lookupPoint), true);
 					}
 				} catch (DOMException e) {
@@ -490,8 +497,10 @@ public class CPPSemantics {
 		if (binding == null && data.skippedScope != null) {
 			if (namePropertyInParent == IASTNamedTypeSpecifier.NAME) {
 				binding= new CPPUnknownMemberClass(data.skippedScope, name.getSimpleID());
-			} else {
+			} else if (data.isFunctionCall()) {
 				binding= new CPPUnknownMethod(data.skippedScope, name.getSimpleID());
+			} else {
+				binding= new CPPUnknownField(data.skippedScope, name.getSimpleID());
 			}
 		}
 
@@ -547,6 +556,21 @@ public class CPPSemantics {
 			if (binding instanceof ICPPField && lookupName.isDefinition()) {
 				if (declaration.getPropertyInParent() != IASTCompositeTypeSpecifier.MEMBER_DECLARATION) {
 					ASTInternal.addDefinition(binding, lookupName);
+				}
+			}
+		}
+		
+		// If the result is a virtual method called without explicit qualification, and we can determine a 
+		// unique final overrider for it in the hierarchy of the method call's implied object type, replace 
+		// the method with its final overrider.
+		if (!(lookupName.getParent() instanceof ICPPASTQualifiedName) &&  binding instanceof ICPPMethod && 
+				((ICPPMethod) binding).isVirtual()) {
+			IType impliedObjectType = data.getImpliedObjectType();
+			if (impliedObjectType instanceof ICPPClassType) {
+				ICPPMethod finalOverrider = CPPInheritance.getFinalOverrider((ICPPMethod) binding, 
+						(ICPPClassType) impliedObjectType, lookupName);
+				if (finalOverrider != null) {
+					binding = finalOverrider;
 				}
 			}
 		}
@@ -1138,10 +1162,11 @@ public class CPPSemantics {
 		char[] tchars= new char[typeDtorChars.length - 1];
 		System.arraycopy(typeDtorChars, 1, tchars, 0, tchars.length);
 
-		LookupData ld2= new LookupData(tchars, data.fTemplateArguments, data.getLookupPoint());
+		LookupData ld2= new LookupData(tchars, data.getTemplateArguments(), data.getLookupPoint());
 		ld2.setIgnorePointOfDeclaration(data.isIgnorePointOfDeclaration());
 		ld2.contentAssist= data.contentAssist;
 		ld2.fNoNarrowing= data.fNoNarrowing;
+		ld2.fHeuristicBaseLookup= data.fHeuristicBaseLookup;
 		ld2.qualified= parent instanceof ICPPASTQualifiedName;
 		ld2.typesOnly= true;
 		lookup(ld2, getLookupScope(typeDtorName));
@@ -1493,6 +1518,12 @@ public class CPPSemantics {
 			} else {
 				nodes= new IASTNode[] {initDeclaration};
 			}
+		} else if (parent instanceof ICPPASTSwitchStatement) {
+			nodes = new IASTNode[] { ((ICPPASTSwitchStatement) parent).getControllerDeclaration() };
+		} else if (parent instanceof ICPPASTIfStatement) {
+			nodes = new IASTNode[] { ((ICPPASTIfStatement) parent).getConditionDeclaration() };
+		} else if (parent instanceof ICPPASTWhileStatement) {
+			nodes = new IASTNode[] { ((ICPPASTWhileStatement) parent).getConditionDeclaration() };
 		} else if (parent instanceof ICPPASTRangeBasedForStatement) {
 			ICPPASTRangeBasedForStatement forStatement = (ICPPASTRangeBasedForStatement) parent;
 			final IASTDeclaration decl = forStatement.getDeclaration();
@@ -1622,12 +1653,6 @@ public class CPPSemantics {
 			declaration = ((IASTDeclarationStatement) node).getDeclaration();
 	    } else if (node instanceof ICPPASTCatchHandler) {
 			declaration = ((ICPPASTCatchHandler) node).getDeclaration();
-	    } else if (node instanceof ICPPASTSwitchStatement) {
-        	declaration = ((ICPPASTSwitchStatement) node).getControllerDeclaration();
-        } else if (node instanceof ICPPASTIfStatement) {
-        	declaration = ((ICPPASTIfStatement) node).getConditionDeclaration();
-	    } else if (node instanceof ICPPASTWhileStatement) {
-	    	declaration = ((ICPPASTWhileStatement) node).getConditionDeclaration();
 	    } else if (node instanceof IASTParameterDeclaration) {
 		    IASTParameterDeclaration parameterDeclaration = (IASTParameterDeclaration) node;
 		    IASTDeclarator dtor = parameterDeclaration.getDeclarator();
@@ -2444,7 +2469,7 @@ public class CPPSemantics {
 		// No arguments to resolve function
 		final IASTNode lookupPoint = data.getLookupPoint();
 		if (!data.hasFunctionArguments()) {
-			return createFunctionSet(fns, data.fTemplateArguments, lookupPoint, lookupName);
+			return createFunctionSet(fns, data.getTemplateArguments(), lookupPoint, lookupName);
 		}
 
 		// Reduce our set of candidate functions to only those who have the right number of parameters
@@ -2452,7 +2477,7 @@ public class CPPSemantics {
 		ICPPFunction[] tmp= selectByArgumentCount(data, fns);
 	    if (tmp.length == 0 || tmp[0] == null)
 			return new ProblemBinding(lookupName, lookupPoint, IProblemBinding.SEMANTIC_NAME_NOT_FOUND, fns);
-	    tmp= CPPTemplates.instantiateForFunctionCall(tmp, data.fTemplateArguments,
+	    tmp= CPPTemplates.instantiateForFunctionCall(tmp, data.getTemplateArguments(),
 	    		Arrays.asList(argTypes),
 	    		Arrays.asList(data.getFunctionArgumentValueCategories()),
 	    		data.argsContainImpliedObject, lookupPoint);
@@ -3050,6 +3075,156 @@ public class CPPSemantics {
 
     	return function;
     }
+	
+	/**
+	 * Given a LiteralExpression with a user-defined literal suffix,
+	 * finds the corresponding defined operator.
+	 * Tries to implement 2.14.8.(2-10)
+	 * @param exp <code>IASTLiteralExpression</code> which has a user-defined literal suffix
+	 * @return CPPFunction or null
+	 * @throws DOMException
+	 */
+	public static IBinding findUserDefinedLiteralOperator(IASTLiteralExpression exp) throws DOMException {
+		IBinding ret = null;
+		/*
+		 * 2.14.8.2
+		 * Let `IASTLiteralExpression exp` = L
+		 * Let `exp.getSuffix()` = X
+		 * Let `bindings` = S
+		 * A user-defined-literal is treated as a call to a literal operator or
+		 * literal operator template (13.5.8). To determine the form of this
+		 * call for a given user-defined-literal L with ud-suffix X, the
+		 * literal-operator-id whose literal suffix identifier is X is looked up
+		 * in the context of L using the rules for unqualified name lookup (3.4.1).
+		 * Let S be the set of declarations found by this lookup.
+		 * S shall not be empty.
+		 *
+		 */
+		int kind = exp.getKind();
+		IBinding[] bindings = findBindings(exp.getTranslationUnit().getScope(), ((CPPASTLiteralExpression) exp).getOperatorName(), false);
+		ICPPFunction[] funcs = new ICPPFunction[bindings.length];
+		ICPPFunctionTemplate[] tplFunctions = new ICPPFunctionTemplate[bindings.length];
+		LookupData data = new LookupData(((CPPASTLiteralExpression) exp).getOperatorName(), null, exp);
+		
+		int i = 0, j = 0;
+		for (IBinding binding : bindings) {
+			if (binding instanceof ICPPFunction || binding instanceof ICPPFunctionTemplate) {
+				funcs[i++] = (ICPPFunction) binding;
+				if (binding instanceof ICPPFunctionTemplate) {
+					tplFunctions[j++] = (ICPPFunctionTemplate) binding;
+				}
+			}
+		}
+		
+		funcs = ArrayUtil.trim(funcs, i);
+		tplFunctions = ArrayUtil.trim(tplFunctions, j);
+		
+		if (funcs.length == 0) {
+			// S shall not be empty
+			return new ProblemBinding(data.getLookupName(), exp, IProblemBinding.SEMANTIC_INVALID_TYPE);
+		}
+		
+		if (kind == IASTLiteralExpression.lk_integer_constant || kind == IASTLiteralExpression.lk_float_constant) {
+			if (kind == IASTLiteralExpression.lk_integer_constant) {
+				/*
+				 * 2.14.8.3
+				 * Let `exp.getValue()` = n
+				 * If L is a user-defined-integer-literal, let n be the literal
+				 * without its ud-suffix. If S contains a literal operator with
+				 * parameter type unsigned long long, then use operator "" X(n ULL)
+				 */
+				CPPBasicType t = new CPPBasicType(Kind.eInt, IBasicType.IS_UNSIGNED | IBasicType.IS_LONG_LONG, exp);
+				data.setFunctionArguments(false, createArgForType(exp, t));
+				ret = resolveFunction(data, funcs, true);
+				if (ret != null && !(ret instanceof ProblemBinding)) {
+					return ret;
+				}
+			} else if (kind == IASTLiteralExpression.lk_float_constant) {
+				/*
+				 * 2.14.8.4
+				 * Let `exp.getValue()` = f
+				 * If L is a user-defined-floating-literal, let f be the literal
+				 * without its ud-suffix. If S contains a literal operator with
+				 * parameter type long double, then use operator "" X(f L)
+				 */
+				CPPBasicType t = new CPPBasicType(Kind.eDouble, IBasicType.IS_LONG, exp);
+				data.setFunctionArguments(false, createArgForType(exp, t));
+				ret = resolveFunction(data, funcs, true);
+				if (ret != null && !(ret instanceof ProblemBinding)) {
+					return ret;
+				}
+			}
+			
+			/*
+			 * 2.14.8.3 (cont.), 2.14.8.4 (cont.)
+			 * Otherwise, S shall contain a raw literal operator or a literal
+			 * operator template but not both.
+			 */
+			// Raw literal operator `operator "" _op(const char * c)`
+			CPPPointerType charArray = new CPPPointerType(CPPBasicType.CHAR, true, false, false);
+			data = new LookupData(((CPPASTLiteralExpression) exp).getOperatorName(), null, exp);
+			data.setFunctionArguments(false, createArgForType(exp, charArray));
+			ret = resolveFunction(data, funcs, true);
+			
+			//
+			char[] stringLiteral = exp.getValue(); // The string literal that was passed to the operator
+			
+			// The string literal is passed to the operator as chars:
+			// "literal"_op -> operator "" _op<'l', 'i', 't', 'e', 'r', 'a', 'l'>();
+			ICPPTemplateArgument args[] = new ICPPTemplateArgument[stringLiteral.length];
+			for (int k = 0; k < stringLiteral.length; k++) {
+				args[k] = new CPPTemplateNonTypeArgument(new EvalFixed(CPPBasicType.CHAR, PRVALUE, Value.create(stringLiteral[k])), exp);
+			}
+			
+			data = new LookupData(((CPPASTLiteralExpression) exp).getOperatorName(), args, exp);
+			IBinding litTpl = resolveFunction(data, tplFunctions, true);
+			
+			// Do we have valid template and non-template bindings?
+			if (ret != null && litTpl != null) {
+				if (!(ret instanceof IProblemBinding) && litTpl instanceof ICPPFunctionInstance) {
+					// Ambiguity? It has two valid options, and the spec says it shouldn't
+					return new ProblemBinding(data.getLookupName(), exp, IProblemBinding.SEMANTIC_AMBIGUOUS_LOOKUP, tplFunctions);
+				}
+				
+				if ((ret instanceof IProblemBinding) && litTpl instanceof ICPPFunctionInstance) {
+					// Only the template binding is valid
+					ret = litTpl;
+				}
+			}
+			else if (ret == null) {
+				// Couldn't find a valid operator
+				return new ProblemBinding(data.getLookupName(), exp, IProblemBinding.SEMANTIC_INVALID_TYPE);
+			}
+		} else if (kind == IASTLiteralExpression.lk_string_literal) {
+			/*
+			 * 2.14.8.5
+			 * If L is a user-defined-string-literal, let str be the literal
+			 * without its ud-suffix and let len be the number of code units in
+			 * str (i.e., its length excluding the terminating null character).
+			 * L is treated as operator "" X(str, len)
+			 */
+			CPPPointerType strType = new CPPPointerType(new CPPBasicType(((CPPASTLiteralExpression) exp).getBasicCharKind(), 0, null), true, false, false);
+			IASTInitializerClause[] initializer = new IASTInitializerClause[] {
+				createArgForType(exp, strType),
+				createArgForType(null, CPPBasicType.UNSIGNED_INT)
+			};
+			data.setFunctionArguments(false, initializer);
+			ret = resolveFunction(data, funcs, true);
+		} else if (kind == IASTLiteralExpression.lk_char_constant) {
+			/*
+			 * 2.14.8.6
+			 * If L is a user-defined-character-literal, let ch be the literal
+			 * without its ud-suffix. S shall contain a literal operator whose
+			 * only parameter has the type ch and the literal L is treated as a
+			 * call operator "" X(ch)
+			 */
+			CPPBasicType t = new CPPBasicType(((CPPASTLiteralExpression) exp).getBasicCharKind(), 0, exp);
+			data.setFunctionArguments(false, createArgForType(exp, t));
+			ret = resolveFunction(data, funcs, true);
+		}
+		
+		return ret;
+	}
 
 	static ICPPFunction resolveTargetedFunction(IType targetType, CPPFunctionSet set, IASTNode point) {
 		targetType= getNestedType(targetType, TDEF | REF | CVTYPE | PTR | MPTR);
@@ -3628,6 +3803,7 @@ public class CPPSemantics {
 			String[] additionalNamespaces) {
 		LookupData data = createLookupData(name);
 		data.contentAssist = true;
+		data.fHeuristicBaseLookup = true;
 		data.setPrefixLookup(prefixLookup);
 		data.foundItems = new CharArrayObjectMap<>(2);
 
@@ -3981,49 +4157,5 @@ public class CPPSemantics {
 			binding = new ProblemBinding(new CPPASTName(unknownName), point, IProblemBinding.SEMANTIC_NAME_NOT_FOUND);
 
 		return binding;
-	}
-	
-	/**
-	 * Given a dependent type, heuristically try to find a concrete scope (i.e. not an unknown scope) for it.
-	 * @param point the point of instantiation for name lookups
-	 */
-	public static IScope heuristicallyFindConcreteScopeForType(IType type, IASTNode point) {
-		if (type instanceof ICPPDeferredClassInstance) {
-			// If this scope is for a deferred-class-instance, use the scope of the primary template.
-			ICPPDeferredClassInstance instance = (ICPPDeferredClassInstance) type;
-			return instance.getClassTemplate().getCompositeScope();
-		} else if (type instanceof TypeOfDependentExpression) {
-			// If this scope is for the id-expression of a field reference, and the field owner
-			// is a deferred-class-instance, look up the field in the scope of the primary template,
-			// and use the scope of the resulting field type.
-			ICPPEvaluation evaluation = ((TypeOfDependentExpression) type).getEvaluation();
-			if (evaluation instanceof EvalID) {
-				EvalID evalId = (EvalID) evaluation;
-				ICPPEvaluation fieldOwner = evalId.getFieldOwner();
-				if (fieldOwner != null) {
-					IType fieldOwnerType = fieldOwner.getTypeOrFunctionSet(point);
-					if (fieldOwnerType instanceof ICPPDeferredClassInstance) {
-						ICPPDeferredClassInstance instance = (ICPPDeferredClassInstance) fieldOwnerType;
-						IScope scope = instance.getClassTemplate().getCompositeScope();
-						LookupData lookup = new LookupData(evalId.getName(), evalId.getTemplateArgs(), point);
-						lookup.qualified = evalId.isQualified();
-						try {
-							CPPSemantics.lookup(lookup, scope);
-						} catch (DOMException e) {
-							return null;
-						}
-						IBinding[] bindings = lookup.getFoundBindings();
-						if (bindings.length == 1 && bindings[0] instanceof IField) {
-							IType fieldType = ((IField) bindings[0]).getType();
-							if (fieldType instanceof ICompositeType) {
-								return ((ICompositeType) fieldType).getCompositeScope(); 
-							}
-						}
-					}
-				}
-			}
-		}
-		// TODO(nathanridge): Handle more cases.
-		return null;
 	}
 }

@@ -31,12 +31,6 @@
       </wizard>
    </extension>
    <extension
-         point="org.eclipse.cdt.arduino.core.consoleService">
-      <provider
-            class="org.eclipse.cdt.arduino.ui.internal.launch.ArduinoLaunchConsole">
-      </provider>
-   </extension>
-   <extension
          point="org.eclipse.ui.propertyPages">
       <page
             class="org.eclipse.cdt.arduino.ui.internal.remote.ArduinoTargetPropertyPage"
@@ -47,6 +41,22 @@
             <adapt
                   type="org.eclipse.cdt.arduino.core.internal.remote.ArduinoRemoteConnection">
             </adapt>
+         </enabledWhen>
+      </page>
+      <page
+            class="org.eclipse.cdt.arduino.ui.internal.project.LibrariesPropertyPage"
+            id="org.eclipse.cdt.arduino.ui.librariesPropertyPage"
+            name="Libraries">
+         <enabledWhen>
+            <and>
+               <instanceof
+                     value="org.eclipse.core.resources.IProject">
+               </instanceof>
+               <test
+                     property="org.eclipse.core.resources.projectNature"
+                     value="org.eclipse.cdt.arduino.core.arduinoNature">
+               </test>
+            </and>
          </enabledWhen>
       </page>
    </extension>
@@ -69,15 +79,15 @@
          point="org.eclipse.ui.preferencePages">
       <page
             category="org.eclipse.cdt.ui.preferences.CPluginPreferencePage"
-            class="org.eclipse.cdt.arduino.ui.internal.ArduinoPreferencePage"
+            class="org.eclipse.cdt.arduino.ui.internal.preferences.ArduinoPreferencePage"
             id="org.eclipse.cdt.arduino.preference.page"
             name="%preferencePage.name">
       </page>
-   </extension>
-   <extension
-         point="org.eclipse.core.runtime.preferences">
-      <initializer
-            class="org.eclipse.cdt.arduino.ui.internal.ArduinoPreferenceInitializer">
-      </initializer>
+      <page
+            category="org.eclipse.cdt.arduino.preference.page"
+            class="org.eclipse.cdt.arduino.ui.internal.preferences.ArduinoBoardsPreferencePage"
+            id="org.eclipse.cdt.arduino.preference.page.boards"
+            name="Boards">
+      </page>
    </extension>
 </plugin>

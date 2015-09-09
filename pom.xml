@@ -15,8 +15,8 @@
 	<name>CDT Parent</name>
 
 	<properties>
-		<tycho-version>0.22.0</tycho-version>
-		<tycho-extras-version>0.22.0</tycho-extras-version>
+		<tycho-version>0.23.0</tycho-version>
+		<tycho-extras-version>0.23.0</tycho-extras-version>
 		<sonar.core.codeCoveragePlugin>jacoco</sonar.core.codeCoveragePlugin>
 		<cdt-site>http://hudson.eclipse.org/cdt/job/cdt-master/lastSuccessfulBuild/artifact/releng/org.eclipse.cdt.repo/target/repository</cdt-site>
 		<repo-path>tools/cdt/builds/master/nightly</repo-path>
@@ -203,6 +203,7 @@
 		<module>testsrunner/org.eclipse.cdt.testsrunner.boost</module>
 		<module>testsrunner/org.eclipse.cdt.testsrunner.gtest</module>
 		<module>testsrunner/org.eclipse.cdt.testsrunner.qttest</module>
+		<module>testsrunner/org.eclipse.cdt.testsrunner.tap</module>
 		<module>testsrunner/org.eclipse.cdt.testsrunner.test</module>
 		<module>testsrunner/org.eclipse.cdt.testsrunner.feature</module>
 		<module>testsrunner/org.eclipse.cdt.testsrunner.source.feature</module>

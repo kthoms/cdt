@@ -797,7 +797,7 @@ public class ASTTypeUtil {
 								CCorePlugin.log(e);
 							}
 						} else {
-							IASTNode node = ASTInternal.getDeclaredInSourceFileOnly(binding);
+							IASTNode node = ASTInternal.getDefinitionOfBinding(binding);
 							if (node != null) {
 								IPath filePath = new Path(node.getTranslationUnit().getFilePath());
 								URI uri = UNCPathConverter.getInstance().toURI(filePath);
@@ -905,7 +905,7 @@ public class ASTTypeUtil {
 			switch (fname[i]) {
 			case '/':
 			case '\\':
-				return i+1;
+				return i + 1;
 			}
 		}
 		return 0;

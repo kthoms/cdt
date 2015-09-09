@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2004, 2013 IBM Corporation and others.
+ * Copyright (c) 2004, 2015 IBM Corporation and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -11,11 +11,13 @@
  *     Markus Schorn (Wind River Systems)
  *     Sergey Prigogin (Google)
  *     Marc-Andre Laperle (Ericsson)
+ *     Richard Eames
  *******************************************************************************/
 package org.eclipse.cdt.internal.core.parser.scanner;
 
 import java.io.File;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -83,6 +85,7 @@ public class CPreprocessor implements ILexerLog, IScanner, IAdaptable {
 	public static final int tSPACE= IToken.FIRST_RESERVED_PREPROCESSOR + 3;
 	public static final int tNOSPACE= IToken.FIRST_RESERVED_PREPROCESSOR + 4;
 	public static final int tMACRO_PARAMETER= IToken.FIRST_RESERVED_PREPROCESSOR + 5;
+	public static final int t__HAS_FEATURE = IToken.FIRST_RESERVED_PREPROCESSOR + 6;
 
 	private static final int ORIGIN_PREPROCESSOR_DIRECTIVE = OffsetLimitReachedException.ORIGIN_PREPROCESSOR_DIRECTIVE;
 	private static final int ORIGIN_INACTIVE_CODE = OffsetLimitReachedException.ORIGIN_INACTIVE_CODE;
@@ -106,7 +109,9 @@ public class CPreprocessor implements ILexerLog, IScanner, IAdaptable {
 	private static final char[] ONCE = "once".toCharArray(); //$NON-NLS-1$
 
 	static final int NO_EXPANSION 		 					= 0x01;
-	static final int PROTECT_DEFINED 	 					= 0x02;
+	// Set in contexts where preprocessor intrinsics such as 'defined'
+	// or '__has_feature' need to be recognized.
+	static final int PROTECT_INTRINSICS 	 				= 0x02;
 	static final int STOP_AT_NL 		 					= 0x04;
 	static final int CHECK_NUMBERS 		 					= 0x08;
 	static final int REPORT_SIGNIFICANT_MACROS 				= 0x10;
@@ -222,6 +227,8 @@ public class CPreprocessor implements ILexerLog, IScanner, IAdaptable {
 		}
 	}
 
+	private static Set<String> sSupportedFeatures;
+	
 	TokenSequence fInputToMacroExpansion= new TokenSequence(false);
 	TokenSequence fLineInputToMacroExpansion= new TokenSequence(true);
 
@@ -294,6 +301,7 @@ public class CPreprocessor implements ILexerLog, IScanner, IAdaptable {
         fLexOptions.fSupportSlashPercentComments= configuration.supportSlashPercentComments();
         fLexOptions.fSupportUTFLiterals = configuration.supportUTFLiterals();
         fLexOptions.fSupportRawStringLiterals = configuration.supportRawStringLiterals();
+        fLexOptions.fSupportUserDefinedLiterals = configuration.supportUserDefinedLiterals();
         if (info instanceof ExtendedScannerInfo)
         	fLexOptions.fIncludeExportPatterns = ((ExtendedScannerInfo) info).getIncludeExportPatterns();
         fLocationMap= new LocationMap(fLexOptions);
@@ -386,7 +394,16 @@ public class CPreprocessor implements ILexerLog, IScanner, IAdaptable {
 	public ILocationResolver getLocationResolver() {
 		return fLocationMap;
 	}
-
+	
+	/**
+	 * @see IScannerExtensionConfiguration#supportAdditionalNumericLiteralSuffixes
+	 * @since 5.10
+	 */
+	@Override
+	public char[] getAdditionalNumericLiteralSuffixes() {
+		return fAdditionalNumericLiteralSuffixes;
+	}
+	
 	private void configureKeywords(ParserLanguage language, IScannerExtensionConfiguration configuration) {
 		Keywords.addKeywordsPreprocessor(fPPKeywords);
 		if (language == ParserLanguage.C) {
@@ -620,14 +637,13 @@ public class CPreprocessor implements ILexerLog, IScanner, IAdaptable {
     		t.setNext(null);
     		return t;
     	}
-    	
-    	try {
+		try {
 			t= internalFetchToken(fRootContext, CHECK_NUMBERS | REPORT_SIGNIFICANT_MACROS | IGNORE_UNDEFINED_SIGNIFICANT_MACROS, false);
 		} catch (OffsetLimitReachedException e) {
 			fHandledCompletion= true;
 			throw e;
 		}
-    	final int offset= fLocationMap.getSequenceNumberForOffset(t.getOffset());
+		final int offset= fLocationMap.getSequenceNumberForOffset(t.getOffset());
 		final int endOffset= fLocationMap.getSequenceNumberForOffset(t.getEndOffset());
 		t.setOffset(offset, endOffset);
 		t.setNext(null);
@@ -638,7 +654,7 @@ public class CPreprocessor implements ILexerLog, IScanner, IAdaptable {
     	t.setNext(fPrefetchedTokens);
     	fPrefetchedTokens= t;
     }
-
+    
     /**
      * Returns next token for the parser. String literals are not concatenated. When
      * the end is reached tokens with type {@link IToken#tEND_OF_INPUT}.
@@ -715,11 +731,12 @@ public class CPreprocessor implements ILexerLog, IScanner, IAdaptable {
      */
     @Override
 	public IToken nextToken() throws EndOfFileException {
-        if (isCancelled) {
+    	if (isCancelled) {
             throw new ParseError(ParseError.ParseErrorKind.TIMEOUT_OR_CANCELLED);
         }
 
     	Token t1= fetchToken();
+    	char[] udlSuffix = null;
     	
     	final int tt1= t1.getType();
     	switch (tt1) {
@@ -741,24 +758,34 @@ public class CPreprocessor implements ILexerLog, IScanner, IAdaptable {
     	case IToken.t_PRAGMA:
     		handlePragmaOperator(t1);
     		return nextToken();
-    		
+    	case IToken.tUSER_DEFINED_STRING_LITERAL:
+    		udlSuffix = getUserDefinedLiteralSuffix(t1);
+    		//$FALL-THROUGH$
     	case IToken.tSTRING:
     	case IToken.tLSTRING:
         case IToken.tUTF16STRING:
         case IToken.tUTF32STRING:
-    		StringType st = StringType.fromToken(tt1);
+     		StringType st = StringType.fromToken(t1);
     		Token t2;
     		StringBuilder buf= null;
-    		int endOffset= 0;
+    		int endOffset= t1.getEndOffset();
     		loop: while (true) {
     			t2= fetchToken();
     			final int tt2= t2.getType();
     			switch (tt2) {
-    			case IToken.tLSTRING:
+    			case IToken.tUSER_DEFINED_STRING_LITERAL:
+    				if (udlSuffix == null) {
+    					udlSuffix = getUserDefinedLiteralSuffix(t2);
+    				} else if (!Arrays.equals(udlSuffix, getUserDefinedLiteralSuffix(t2))) {
+    					handleProblem(IProblem.PREPROCESSOR_MULTIPLE_USER_DEFINED_SUFFIXES_IN_CONCATENATION,
+    							udlSuffix, t2.getOffset(), endOffset);
+    				}
+					//$FALL-THROUGH$
+				case IToken.tLSTRING:
     			case IToken.tSTRING:
     		    case IToken.tUTF16STRING:
     		    case IToken.tUTF32STRING:
-    				st = StringType.max(st, StringType.fromToken(tt2));
+    				st = StringType.max(st, StringType.fromToken(t2));
     				if (buf == null) {
     					buf= new StringBuilder();
     					appendStringContent(buf, t1);
@@ -773,23 +800,30 @@ public class CPreprocessor implements ILexerLog, IScanner, IAdaptable {
     		    case IToken.t_PRAGMA:
     		    	handlePragmaOperator(t2);
     		    	continue loop;
-    			default:
+				default:
     				break loop;
     			}
     		}
     		pushbackToken(t2);
     		if (buf != null) {
     			char[] prefix = st.getPrefix();
-    			char[] image= new char[buf.length() + prefix.length + 2];
+    			final int imageLength = buf.length() + prefix.length + 2 + (udlSuffix == null ? 0 : udlSuffix.length); 
+    			char[] image= new char[imageLength];
     			int off= -1;
+    			int tokenType = st.getTokenValue();
     			
     			for (char c : prefix)
     				image[++off] = c;
     			
     			image[++off]= '"';
     			buf.getChars(0, buf.length(), image, ++off);
-    			image[image.length - 1]= '"';
-    			t1= new TokenWithImage(st.getTokenValue(), null, t1.getOffset(), endOffset, image);
+    			off += buf.length();
+    			image[off]= '"';
+    			if (udlSuffix != null) {
+    				System.arraycopy(udlSuffix, 0, image, ++off, udlSuffix.length);
+    				tokenType = IToken.tUSER_DEFINED_STRING_LITERAL;
+    			}
+    			t1= new TokenWithImage(tokenType, null, t1.getOffset(), endOffset, image);
     		}
     		break;
     		
@@ -841,7 +875,12 @@ public class CPreprocessor implements ILexerLog, IScanner, IAdaptable {
     	}
     	
     	if (length > 1) {
-    		final int diff= image[length - 1] == '"' ? length - start - 1 : length - start;
+    		int diff = 0;
+    		if (t1.getType() == IToken.tUSER_DEFINED_STRING_LITERAL) {
+    			diff = t1.getImage().lastIndexOf('"') - start;
+    		} else {
+    			diff= image[length - 1] == '"' ? length - start - 1 : length - start;
+    		}
     		if (diff > 0) {
     			buf.append(image, start, diff);
     		}
@@ -850,6 +889,8 @@ public class CPreprocessor implements ILexerLog, IScanner, IAdaptable {
 
 	Token internalFetchToken(final ScannerContext uptoEndOfCtx, int options, boolean withinExpansion)
 			throws OffsetLimitReachedException {
+		
+		
         Token ppToken= fCurrentContext.currentLexerToken();
         while (true) {
 			switch (ppToken.getType()) {
@@ -966,6 +1007,8 @@ public class CPreprocessor implements ILexerLog, IScanner, IAdaptable {
         boolean isHex = false;
         boolean isOctal = false;
         boolean hasDot= false;
+        
+        boolean badSuffix = false;
 
         int pos= 0;
         if (image.length > 1) {
@@ -1002,6 +1045,10 @@ public class CPreprocessor implements ILexerLog, IScanner, IAdaptable {
             	switch (image[pos]) {
                 case '0': case'1':
                 	continue;
+                case 'e': case 'E':
+                case '.':
+                	handleProblem(IProblem.SCANNER_FLOAT_WITH_BAD_PREFIX, "0b".toCharArray(), number.getOffset(), number.getEndOffset()); //$NON-NLS-1$
+                	return;
                 default:
                 	// 0 and 1 are the only allowed digits for binary integers
                 	// No floating point, exponents etc. are allowed
@@ -1069,38 +1116,71 @@ public class CPreprocessor implements ILexerLog, IScanner, IAdaptable {
             	break loop;
             }
         }
-
-        // check the suffix
-        loop: for (; pos < image.length; pos++) {
-        	final char c= image[pos];
-            switch (c) {
-            case 'u': case 'U': case 'L': case 'l':
-            	continue;
-            case 'f': case 'F':
-            	if (isFloat) {
-            		continue loop;
-            	}
-            }
-            for (int i= 0; i < fAdditionalNumericLiteralSuffixes.length; i++) {
-				if (fAdditionalNumericLiteralSuffixes[i] == c) {
-					continue loop;
-				}
-			}
-            if (isBin) {
-            	// The check for bin has to come before float, otherwise binary integers
-            	// with float components get flagged as BAD_FLOATING_POINT
-            	handleProblem(IProblem.SCANNER_BAD_BINARY_FORMAT, image, number.getOffset(), number.getEndOffset());
-            } else if (isFloat) {
-            	handleProblem(IProblem.SCANNER_BAD_FLOATING_POINT, image, number.getOffset(), number.getEndOffset());
-            } else if (isHex) {
-            	handleProblem(IProblem.SCANNER_BAD_HEX_FORMAT, image, number.getOffset(), number.getEndOffset());
-            } else if (isOctal) {
-            	handleProblem(IProblem.SCANNER_BAD_OCTAL_FORMAT, image, number.getOffset(), number.getEndOffset());
-            } else {
-            	handleProblem(IProblem.SCANNER_BAD_DECIMAL_FORMAT, image, number.getOffset(), number.getEndOffset());
-            }
-            return;
+        if (pos < image.length) {
+	        char c = image[pos];
+	        if (Character.isLetter(c) || c == '_') {
+	        	// check the suffix
+	        	final int suffixStart = pos;
+	            loop: for (; pos < image.length; pos++) {
+	            	c= image[pos];
+	                switch (c) {
+	                case 'u': case 'U': case 'L': case 'l':
+	                	continue;
+	                case 'f': case 'F':
+	                	if (isFloat) {
+	                		continue loop;
+	                	}
+	                
+	    				//$FALL-THROUGH$
+	    			case 'a': case 'b': case 'c': case 'd': case 'e':  case 'g': case 'h': case 'i': 
+	                case 'j': case 'k':  case 'm': case 'n': case 'o': case 'p': case 'q': case 'r': 
+	                case 's': case 't': case 'v': case 'w': case 'x': case 'y': case 'z':
+	                case 'A': case 'B': case 'C': case 'D': case 'E': case 'G': case 'H': case 'I':
+	                case 'J': case 'K':  case 'M': case 'N': case 'O': case 'P': case 'Q': case 'R': 
+	                case 'S': case 'T':case 'V': case 'W': case 'X': case 'Y': case 'Z':
+	                case '0': case '1': case '2': case '3': case '4':
+	                case '5': case '6': case '7': case '8': case '9':
+	                case '_':
+	                	if (fLexOptions.fSupportUserDefinedLiterals) {
+	                		continue loop;
+	                	}
+	                }
+	                for (int i= 0; i < fAdditionalNumericLiteralSuffixes.length; i++) {
+	    				if (fAdditionalNumericLiteralSuffixes[i] == c) {
+	    					continue loop;
+	    				} else {
+	    					badSuffix = true;
+	    				}
+	    			}
+	                
+	                if (badSuffix) {
+	                	char[] suffix = CharArrayUtils.subarray(image, suffixStart, -1);
+	                	handleProblem(IProblem.SCANNER_CONSTANT_WITH_BAD_SUFFIX, suffix, number.getOffset(), number.getEndOffset());
+	                	return;
+	                }
+	            }
+	        	return;
+	        }
         }
+        else {
+        	return;
+        }
+        
+        if (isBin) {
+        	// The check for bin has to come before float, otherwise binary integers
+        	// with float components get flagged as BAD_FLOATING_POINT
+        	handleProblem(IProblem.SCANNER_BAD_BINARY_FORMAT, image, number.getOffset(), number.getEndOffset());
+        } else if (isFloat) {
+        	handleProblem(IProblem.SCANNER_BAD_FLOATING_POINT, image, number.getOffset(), number.getEndOffset());
+        } else if (isHex) {
+        	handleProblem(IProblem.SCANNER_BAD_HEX_FORMAT, image, number.getOffset(), number.getEndOffset());
+        } else if (isOctal) {
+        	handleProblem(IProblem.SCANNER_BAD_OCTAL_FORMAT, image, number.getOffset(), number.getEndOffset());
+        } else {
+        	handleProblem(IProblem.SCANNER_BAD_DECIMAL_FORMAT, image, number.getOffset(), number.getEndOffset());
+        }
+        return;
+        
     }
 
     private <T> T findInclusion(final String includeDirective, final boolean quoteInclude,
@@ -1808,7 +1888,7 @@ public class CPreprocessor implements ILexerLog, IScanner, IAdaptable {
     	scannerCtx.clearInactiveCodeMarkerToken();
     	int options= STOP_AT_NL | REPORT_SIGNIFICANT_MACROS;
     	if (isCondition)
-    		options |= PROTECT_DEFINED;
+    		options |= PROTECT_INTRINSICS;
     	
     	loop: while (true) {
 			Token t= internalFetchToken(scannerCtx, options, withinExpansion);
@@ -1822,6 +1902,9 @@ public class CPreprocessor implements ILexerLog, IScanner, IAdaptable {
     		case IToken.tIDENTIFIER:
     			break;
     		case tDEFINED:
+    			options |= NO_EXPANSION;
+    			break;
+    		case t__HAS_FEATURE:
     			options |= NO_EXPANSION;
     			break;
     		case IToken.tLPAREN:
@@ -1913,9 +1996,15 @@ public class CPreprocessor implements ILexerLog, IScanner, IAdaptable {
 			boolean withinExpansion) throws OffsetLimitReachedException {
 		final boolean reportSignificant = (options & REPORT_SIGNIFICANT_MACROS) != 0;
 		final char[] name= identifier.getCharImage();
-		if ((options & PROTECT_DEFINED) != 0 && CharArrayUtils.equals(name, Keywords.cDEFINED)) {
-			identifier.setType(tDEFINED);
-			return false;
+		if ((options & PROTECT_INTRINSICS) != 0) {
+			if (CharArrayUtils.equals(name, Keywords.cDEFINED)) {
+				identifier.setType(tDEFINED);
+				return false;
+			}
+			if (CharArrayUtils.equals(name, Keywords.c__HAS_FEATURE)) {
+				identifier.setType(t__HAS_FEATURE);
+				return false;
+			}
 		}
         PreprocessorMacro macro= fMacroDictionary.get(name);
         if (macro == null) {
@@ -1953,6 +2042,25 @@ public class CPreprocessor implements ILexerLog, IScanner, IAdaptable {
         return true;
 	}
 
+	/**
+	 * Returns the user-defined suffix of a user-define string literal.
+	 *
+	 * @param token
+	 * @return the suffix of the token, if it exists
+	 */
+	private static char[] getUserDefinedLiteralSuffix(IToken token) {
+		if (token.getType() != IToken.tUSER_DEFINED_STRING_LITERAL)
+			throw new IllegalArgumentException();
+
+		char[] image = token.getCharImage();
+		int offset = CharArrayUtils.lastIndexOf('"', image) + 1;
+		if (offset <= 0)
+			throw new IllegalArgumentException();
+		if (offset == image.length)
+			return CharArrayUtils.EMPTY_CHAR_ARRAY;
+		return CharArrayUtils.subarray(image, offset, image.length);
+	}
+
 	@Override
 	@SuppressWarnings("unchecked")
 	public <T> T getAdapter(Class<T> adapter) {
@@ -1971,5 +2079,95 @@ public class CPreprocessor implements ILexerLog, IScanner, IAdaptable {
 			|| CharArrayUtils.equals(__FILE__.getNameCharArray(), name)
 			|| CharArrayUtils.equals(__DATE__.getNameCharArray(), name)
 			|| CharArrayUtils.equals(__TIME__.getNameCharArray(), name);
+	}
+	
+	@SuppressWarnings("nls")
+	public static Set<String> getSupportedFeatures() {
+		if (sSupportedFeatures == null) {
+			sSupportedFeatures = new HashSet<>();
+			
+			// C++98 features
+			sSupportedFeatures.add("cxx_exceptions");
+			sSupportedFeatures.add("cxx_rtti");
+			
+			// C++11 features
+			// missing: cxx_access_control_sfinae (needs to be tested)
+			sSupportedFeatures.add("cxx_alias_templates");
+			sSupportedFeatures.add("cxx_alignas");
+			sSupportedFeatures.add("cxx_alignof");
+			sSupportedFeatures.add("cxx_attributes");
+			sSupportedFeatures.add("cxx_auto_type");
+			sSupportedFeatures.add("cxx_constexpr");
+			sSupportedFeatures.add("cxx_decltype");
+			// missing: cxx_decltype_incomplete_return_types (needs to be tested; see bug 324096)
+			sSupportedFeatures.add("cxx_default_function_template_args");
+			sSupportedFeatures.add("cxx_defaulted_functions");
+			sSupportedFeatures.add("cxx_delegating_constructors");
+			sSupportedFeatures.add("cxx_explicit_conversions");
+			sSupportedFeatures.add("cxx_generalized_initializers");
+			// missing: cxx_implicit_moves (bug 327301)
+			sSupportedFeatures.add("cxx_inheriting_constructors");
+			sSupportedFeatures.add("cxx_inline_namespaces");
+			sSupportedFeatures.add("cxx_lambdas");
+			sSupportedFeatures.add("cxx_local_type_template_args");
+			sSupportedFeatures.add("cxx_noexcept");
+			sSupportedFeatures.add("cxx_nonstatic_member_init");
+			sSupportedFeatures.add("cxx_nullptr");
+			sSupportedFeatures.add("cxx_override_control");
+			sSupportedFeatures.add("cxx_range_for");
+			sSupportedFeatures.add("cxx_raw_string_literals");
+			sSupportedFeatures.add("cxx_reference_qualified_functions");
+			sSupportedFeatures.add("cxx_rvalue_references");
+			sSupportedFeatures.add("cxx_static_assert");
+			sSupportedFeatures.add("cxx_strong_enums");
+			sSupportedFeatures.add("cxx_thread_local");
+			sSupportedFeatures.add("cxx_trailing_return");
+			sSupportedFeatures.add("cxx_unicode_literals");
+			// missing: cxx_unrestricted_unions (bug 327299)
+			sSupportedFeatures.add("cxx_user_literals");
+			sSupportedFeatures.add("cxx_variadic_templates");
+			
+			// C++14 features
+			// none supported yet
+			
+			// C11 features
+			sSupportedFeatures.add("c_alignas");
+			sSupportedFeatures.add("c_alignof");
+			// missing: c_atomic (bug 445297)
+			// missing: c_generic_selections (bug 445296)
+			// missing: c_static_assert (bug 445297)
+			// missing: c_thread_local (bug 445297)
+			
+			// Type trait primitives
+			// missing: has_nothrow_assign
+			// missing: has_nothrow_copy
+			// missing: has_nothrow_constructor
+			// missing: has_trivial_assign
+			sSupportedFeatures.add("has_trivial_copy");
+			// missing: has_trivial_constructor
+			// missing: has_trivial_destructor
+			// missing: has_virtual_destructor
+			sSupportedFeatures.add("is_abstract");
+			sSupportedFeatures.add("is_base_of");
+			sSupportedFeatures.add("is_class");
+			// missing: is_constructible
+			// missing: is_convertible_to
+			// missing: is_destructible
+			// missing: is_empty
+			sSupportedFeatures.add("is_enum");
+			sSupportedFeatures.add("is_final");
+			// missing: is_interface_class
+			// missing: is_literal
+			// missing: is_nothrow_assignable
+			// missing: is_nothrow_constructible
+			// missing: is_nothrow_destructible
+			sSupportedFeatures.add("is_pod");
+			sSupportedFeatures.add("is_polymorphic");
+			// missing: is_trivially_assignable
+			// missing: is_trivially_constructible
+			sSupportedFeatures.add("is_union");
+			sSupportedFeatures.add("underlying_type");
+		}
+		return sSupportedFeatures;
 	}
 }

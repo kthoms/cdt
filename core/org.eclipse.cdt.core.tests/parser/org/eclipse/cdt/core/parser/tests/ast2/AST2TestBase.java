@@ -110,7 +110,7 @@ import junit.framework.AssertionFailedError;
  */
 public class AST2TestBase extends BaseTestCase {
 	public final static String TEST_CODE = "<testcode>";
-    protected static final IParserLogService NULL_LOG = new NullLogService();
+	protected static final IParserLogService NULL_LOG = new NullLogService();
     protected static boolean sValidateCopy;
 
     protected static class CommonCTypes {
@@ -778,8 +778,15 @@ public class AST2TestBase extends BaseTestCase {
     	}
 
     	public void assertVariableType(String variableName, IType expectedType) {
-    		IVariable var = assertNonProblem(variableName, IVariable.class);
+    		IVariable var = assertNonProblem(variableName);
     		assertSameType(expectedType, var.getType());
+    	}
+    	
+    	public void assertVariableValue(String variableName, long expectedValue) {
+    		IVariable var = assertNonProblem(variableName);
+    		assertNotNull(var.getInitialValue());
+    		assertNotNull(var.getInitialValue().numericalValue());
+    		assertEquals(expectedValue, var.getInitialValue().numericalValue().longValue());
     	}
 
 		public <T, U extends T> U assertType(T obj, Class... cs) {
@@ -836,6 +843,11 @@ public class AST2TestBase extends BaseTestCase {
 		tu.accept(col);
 		assertNoProblemBindings(col);
 		return tu;
+	}
+
+	protected BindingAssertionHelper getAssertionHelper(ParserLanguage lang) throws ParserException, IOException {
+		String code= getAboveComment();
+		return new BindingAssertionHelper(code, lang);
 	}
 
 	final protected void assertNoProblemBindings(NameCollector col) {

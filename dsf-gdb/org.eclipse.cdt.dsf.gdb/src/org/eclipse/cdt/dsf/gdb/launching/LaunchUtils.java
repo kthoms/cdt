@@ -364,6 +364,70 @@ public class LaunchUtils {
 	}
 	
 	/**
+	 * Compares two version numbers.
+	 * Returns -1, 0, or 1 if v1 is less than, equal to, or greater than v2, respectively.
+	 * @param v1 The first version
+	 * @param v2 The second version
+	 * @return -1, 0, or 1 if v1 is less than, equal to, or greater than v2, respectively.
+	 * @since 4.8
+	 */
+	public static int compareVersions(String v1, String v2) {
+		if (v1 == null || v2 == null) throw new NullPointerException();
+		
+		String[] v1Parts = v1.split("\\."); //$NON-NLS-1$
+		String[] v2Parts = v2.split("\\."); //$NON-NLS-1$
+		for (int i = 0; i < v1Parts.length && i < v2Parts.length; i++) {			
+			try {
+				int v1PartValue = Integer.parseInt(v1Parts[i]);
+				int v2PartValue = Integer.parseInt(v2Parts[i]);
+
+				if (v1PartValue > v2PartValue) {
+					return 1;
+				} else if (v1PartValue < v2PartValue) {
+					return -1;
+				}
+			} catch (NumberFormatException e) {
+				// Non-integer part, ignore it
+				continue;
+			}
+		}
+		
+		// If we get here is means the versions are still equal
+		// but there could be extra parts to examine
+		
+		if (v1Parts.length < v2Parts.length) {
+			// v2 has extra parts, which implies v1 is a lower version (e.g., v1 = 7.9 v2 = 7.9.1)
+			// unless each extra part is 0, in which case the two versions are equal (e.g., v1 = 7.9 v2 = 7.9.0)
+			for (int i = v1Parts.length; i < v2Parts.length; i++) {
+				try {
+					if (Integer.parseInt(v2Parts[i]) != 0) {
+						return -1;
+					}
+				} catch (NumberFormatException e) {
+					// Non-integer part, ignore it
+					continue;
+				}
+			}
+		}
+		if (v1Parts.length > v2Parts.length) {
+			// v1 has extra parts, which implies v1 is a higher version (e.g., v1 = 7.9.1 v2 = 7.9)
+			// unless each extra part is 0, in which case the two versions are equal (e.g., v1 = 7.9.0 v2 = 7.9)
+			for (int i = v2Parts.length; i < v1Parts.length; i++) {
+				try {
+					if (Integer.parseInt(v1Parts[i]) != 0) {
+						return 1;
+					}
+				} catch (NumberFormatException e) {
+					// Non-integer part, ignore it
+					continue;
+				}
+			}
+		}
+
+		return 0;
+	}
+
+	/**
 	 * Read from the specified stream and return what was read.
 	 * 
 	 * @param stream The input stream to be used to read the data.  This method will close the stream.
@@ -449,39 +513,45 @@ public class LaunchUtils {
 			return null;
 		}
 		IProject project = ResourcesPlugin.getWorkspace().getRoot().getProject(projectName);
-		if (project == null || !project.isAccessible())
+		if (project == null || !project.isAccessible()) {
 			return null;
+		}
 
 		ICProjectDescription projDesc =	CoreModel.getDefault().getProjectDescription(project, false);
 
 		// Not a CDT project?
-		if (projDesc == null)
+		if (projDesc == null) {
 		    return null;
+		}
 
 		String buildConfigID = config.getAttribute(ICDTLaunchConfigurationConstants.ATTR_PROJECT_BUILD_CONFIG_ID, ""); //$NON-NLS-1$
 		ICConfigurationDescription cfg = null;
-		if (buildConfigID.length() != 0)
+		if (buildConfigID.length() != 0) {
 		    cfg = projDesc.getConfigurationById(buildConfigID);
+		}
 
 		// if configuration is null fall-back to active
-		if (cfg == null)
+		if (cfg == null) {
 		    cfg = projDesc.getActiveConfiguration();
+		}
 
 		// Environment variables and inherited vars
 		HashMap<String, String> envMap = new HashMap<String, String>();
 		IEnvironmentVariable[] vars = CCorePlugin.getDefault().getBuildEnvironmentManager().getVariables(cfg, true);
-		for (IEnvironmentVariable var : vars)
+		for (IEnvironmentVariable var : vars) {
 			envMap.put(var.getName(), var.getValue());
+		}
 
 		// Add variables from build info
-		ICdtVariable[] build_vars = CCorePlugin.getDefault().getCdtVariableManager().getVariables(cfg);
-		for (ICdtVariable var : build_vars) {
+		ICdtVariable[] buildVars = CCorePlugin.getDefault().getCdtVariableManager().getVariables(cfg);
+		for (ICdtVariable var : buildVars) {
 			try {
 				// The project_classpath variable contributed by JDT is useless for running C/C++
 				// binaries, but it can be lethal if it has a very large value that exceeds shell
 				// limit. See http://bugs.eclipse.org/bugs/show_bug.cgi?id=408522
-				if (!"project_classpath".equals(var.getName())) //$NON-NLS-1$
+				if (!"project_classpath".equals(var.getName())) {//$NON-NLS-1$
 					envMap.put(var.getName(), var.getStringValue());
+				}
 			} catch (CdtVariableException e) {
 				// Some Eclipse dynamic variables can't be resolved dynamically... we don't care.
 			}

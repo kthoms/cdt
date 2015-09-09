@@ -1,14 +1,24 @@
+/*******************************************************************************
+ * Copyright (c) 2015 QNX Software Systems and others.
+ * All rights reserved. This program and the accompanying materials
+ * are made available under the terms of the Eclipse Public License v1.0
+ * which accompanies this distribution, and is available at
+ * http://www.eclipse.org/legal/epl-v10.html
+ *******************************************************************************/
 package org.eclipse.cdt.arduino.ui.internal.remote;
 
 import java.io.IOException;
 import java.util.Collection;
 
-import org.eclipse.cdt.arduino.core.Board;
-import org.eclipse.cdt.arduino.core.IArduinoBoardManager;
-import org.eclipse.cdt.arduino.core.IArduinoRemoteConnection;
+import org.eclipse.cdt.arduino.core.internal.board.ArduinoBoard;
+import org.eclipse.cdt.arduino.core.internal.board.ArduinoManager;
+import org.eclipse.cdt.arduino.core.internal.board.ArduinoPackage;
+import org.eclipse.cdt.arduino.core.internal.board.ArduinoPlatform;
+import org.eclipse.cdt.arduino.core.internal.remote.ArduinoRemoteConnection;
 import org.eclipse.cdt.arduino.ui.internal.Activator;
 import org.eclipse.cdt.arduino.ui.internal.Messages;
 import org.eclipse.cdt.serial.SerialPort;
+import org.eclipse.core.runtime.CoreException;
 import org.eclipse.remote.core.IRemoteConnection;
 import org.eclipse.remote.core.IRemoteConnectionWorkingCopy;
 import org.eclipse.remote.core.exception.RemoteConnectionException;
@@ -26,8 +36,8 @@ public class ArduinoTargetPropertyPage extends PropertyPage implements IWorkbenc
 
 	private Combo portSelector;
 	private Combo boardSelector;
-	
-	private Board[] boards;
+
+	private ArduinoBoard[] boards;
 
 	@Override
 	protected Control createContents(Composite parent) {
@@ -35,7 +45,7 @@ public class ArduinoTargetPropertyPage extends PropertyPage implements IWorkbenc
 		comp.setLayout(new GridLayout(2, false));
 
 		IRemoteConnection remoteConnection = (IRemoteConnection) getElement().getAdapter(IRemoteConnection.class);
-		IArduinoRemoteConnection arduinoRemote = remoteConnection.getService(IArduinoRemoteConnection.class);
+		ArduinoRemoteConnection arduinoRemote = remoteConnection.getService(ArduinoRemoteConnection.class);
 
 		Label portLabel = new Label(comp, SWT.NONE);
 		portLabel.setText(Messages.ArduinoTargetPropertyPage_0);
@@ -71,21 +81,24 @@ public class ArduinoTargetPropertyPage extends PropertyPage implements IWorkbenc
 		boardSelector = new Combo(comp, SWT.READ_ONLY);
 		boardSelector.setLayoutData(new GridData(GridData.FILL_HORIZONTAL));
 
-		Board currentBoard = arduinoRemote.getBoard();
-		IArduinoBoardManager boardManager = Activator.getService(IArduinoBoardManager.class);
-		Collection<Board> boardList = boardManager.getBoards();
-		boards = new Board[boardList.size()];
-		i = 0;
-		int boardSel = 0;
-		for (Board board : boardList) {
-			boards[i] = board;
-			boardSelector.add(board.getName());
-			if (board.equals(currentBoard)) {
-				boardSel = i;
+		try {
+			ArduinoBoard currentBoard = arduinoRemote.getBoard();
+			Collection<ArduinoBoard> boardList = ArduinoManager.instance.getBoards();
+			boards = new ArduinoBoard[boardList.size()];
+			i = 0;
+			int boardSel = 0;
+			for (ArduinoBoard board : boardList) {
+				boards[i] = board;
+				boardSelector.add(board.getName());
+				if (board.equals(currentBoard)) {
+					boardSel = i;
+				}
+				i++;
 			}
-			i++;
+			boardSelector.select(boardSel);
+		} catch (CoreException e) {
+			Activator.log(e);
 		}
-		boardSelector.select(boardSel);
 
 		return comp;
 	}
@@ -96,10 +109,14 @@ public class ArduinoTargetPropertyPage extends PropertyPage implements IWorkbenc
 		IRemoteConnectionWorkingCopy workingCopy = remoteConnection.getWorkingCopy();
 
 		String portName = portSelector.getItem(portSelector.getSelectionIndex());
-		workingCopy.setAttribute(IArduinoRemoteConnection.PORT_NAME, portName);
+		workingCopy.setAttribute(ArduinoRemoteConnection.PORT_NAME, portName);
 
-		Board board = boards[boardSelector.getSelectionIndex()];
-		workingCopy.setAttribute(IArduinoRemoteConnection.BOARD_ID, board.getId());
+		ArduinoBoard board = boards[boardSelector.getSelectionIndex()];
+		workingCopy.setAttribute(ArduinoRemoteConnection.BOARD_NAME, board.getName());
+		ArduinoPlatform platform = board.getPlatform();
+		workingCopy.setAttribute(ArduinoRemoteConnection.PLATFORM_NAME, platform.getName());
+		ArduinoPackage pkg = platform.getPackage();
+		workingCopy.setAttribute(ArduinoRemoteConnection.PACKAGE_NAME, pkg.getName());
 
 		try {
 			workingCopy.save();
@@ -108,5 +125,5 @@ public class ArduinoTargetPropertyPage extends PropertyPage implements IWorkbenc
 		}
 		return true;
 	}
-	
+
 }

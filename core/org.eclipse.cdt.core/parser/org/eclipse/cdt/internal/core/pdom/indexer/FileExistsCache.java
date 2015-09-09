@@ -1,5 +1,5 @@
 /*******************************************************************************
- * Copyright (c) 2008, 2011 Wind River Systems, Inc. and others.
+ * Copyright (c) 2008, 2015 Wind River Systems, Inc. and others.
  * All rights reserved. This program and the accompanying materials
  * are made available under the terms of the Eclipse Public License v1.0
  * which accompanies this distribution, and is available at
@@ -7,7 +7,8 @@
  *
  * Contributors:
  *     Markus Schorn - initial API and implementation
- *******************************************************************************/ 
+ *     Karsten Thoms (itemis) - Bug 471103
+ *******************************************************************************/
 package org.eclipse.cdt.internal.core.pdom.indexer;
 
 import java.io.File;
@@ -25,9 +26,9 @@ import org.eclipse.core.filesystem.IFileStore;
 import org.eclipse.core.runtime.CoreException;
 
 /**
- * A cache for checking whether a file exists. The cache shall be used for a limited amount of time, only (e.g. one 
- * indexer task). It uses as much memory as it needs. To protect against OutOfMemory situations, a soft reference is
- * used.
+ * A cache for checking whether a file exists. The cache shall be used for a limited amount of time,
+ * only (e.g. one indexer task). It uses as much memory as it needs. To protect against OutOfMemory
+ * situations, a soft reference is used.
  * @since 5.0
  */
 public final class FileExistsCache {
@@ -44,20 +45,37 @@ public final class FileExistsCache {
 	}
 
 	private Reference<Map<String, Content>> fCache;
+	// Cache for recent results of isFile calls (bug 471103).
+	private final Map<String, Boolean> fCacheIsFile = new HashMap<>();
 	private final boolean fCaseInSensitive;
 
 	public FileExistsCache(boolean caseInsensitive) {
 		fCaseInSensitive= caseInsensitive;
-		fCache= new SoftReference<Map<String, Content>>(new HashMap<String, Content>());	// before running out of memory the entire map will be thrown away.
+		Map<String, Content> cache = new HashMap<>();
+		// Before running out of memory the entire map will be thrown away.
+		fCache= new SoftReference<>(cache);
 	}
-	
+
 	public boolean isFile(String path) {
+		// Fast return when path was already queried. The method is potentially called multiple times with
+		// the same path on each return statement the returned value is stored in the cache (bug 471103).
+		Boolean cachedResult = fCacheIsFile.get(path);
+		if (!BYPASS_CACHE && cachedResult != null) {
+			return cachedResult.booleanValue();
+		}
+
+		boolean result = isFileInternal(path);
+		fCacheIsFile.put(path, result);
+		return result;
+	}
+
+	private boolean isFileInternal(String path) {
 		String parent;
 		String name;
 		File file = null;
 		IFileStore parentStore = null;
 		IFileStore fileStore = null;
-		
+
 		if (UNCPathConverter.isUNC(path)) {
 			try {
 				URI uri = UNCPathConverter.getInstance().toURI(path);
@@ -79,17 +97,17 @@ public final class FileExistsCache {
 			if (BYPASS_CACHE) {
 				return file.isFile();
 			}
-			
+
 			parent= file.getParent();
 			if (parent == null)
 				return false;
-			
+
 			name= file.getName();
 		}
 		if (fCaseInSensitive)
 			name= name.toUpperCase();
-		
-		Content avail= getExistsCache().get(parent); 
+
+		Content avail= getExistsCache().get(parent);
 		if (avail == null) {
 			String[] files = null;
 			try {
@@ -114,13 +132,13 @@ public final class FileExistsCache {
 		if (idx < 0)
 			return false;
 		idx *= 2;
-		
+
 		final BitSet isFileBitset = avail.fIsFile;
 		if (isFileBitset.get(idx))
 			return true;
 		if (isFileBitset.get(idx + 1))
 			return false;
-		
+
 		if ((file != null && file.isFile()) || (fileStore != null && !fileStore.fetchInfo().isDirectory())) {
 			isFileBitset.set(idx);
 			return true;
@@ -132,8 +150,9 @@ public final class FileExistsCache {
 	private Map<String, Content> getExistsCache() {
 		Map<String, Content> cache= fCache.get();
 		if (cache == null) {
-			cache= new HashMap<String, Content>();
-			fCache= new SoftReference<Map<String, Content>>(cache); // before running out of memory the entire map will be thrown away.
+			cache= new HashMap<>();
+			// Before running out of memory the entire map will be thrown away.
+			fCache= new SoftReference<>(cache);
 		}
 		return cache;
 	}

@@ -14,6 +14,7 @@
  *******************************************************************************/
 package org.eclipse.cdt.debug.internal.ui.breakpoints;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -63,6 +64,8 @@ import org.eclipse.jface.viewers.ISelection;
 import org.eclipse.jface.viewers.IStructuredSelection;
 import org.eclipse.jface.window.Window;
 import org.eclipse.swt.SWT;
+import org.eclipse.swt.events.MouseAdapter;
+import org.eclipse.swt.events.MouseEvent;
 import org.eclipse.swt.events.SelectionAdapter;
 import org.eclipse.swt.events.SelectionEvent;
 import org.eclipse.swt.events.SelectionListener;
@@ -155,6 +158,19 @@ public class CBreakpointPropertyPage extends FieldEditorPreferencePage implement
 			super( name, labelText, parent );
 		}
 
+		@Override
+		protected void doFillIntoGrid(Composite parent, int numColumns) {
+			super.doFillIntoGrid(parent, numColumns);
+			// also validate on mouse clicks, eg. middle-mouse-paste
+			Text textControl = getTextControl();
+			textControl.addMouseListener(new MouseAdapter() {
+				@Override
+				public void mouseUp(MouseEvent e) {
+					valueChanged();
+				}
+			});
+		}
+
 		/**
 		 * @see StringFieldEditor#checkState()
 		 */
@@ -175,6 +191,7 @@ public class CBreakpointPropertyPage extends FieldEditorPreferencePage implement
 				super.doStore();
 			}
 		}
+		@Override
 		protected void doLoad()  {
 			String value = getPreferenceStore().getString(getPreferenceName());
             setStringValue(value);
@@ -277,6 +294,22 @@ public class CBreakpointPropertyPage extends FieldEditorPreferencePage implement
 			});
 		}
 
+		@Override
+		protected boolean doCheckState() {
+			// Check that the file name supplied is absolute and exists so that we can 
+			// associate it to an IResource later for creating a breakpoint marker.
+			String stringValue = getStringValue();
+			if (stringValue == null) {
+				return false;
+			}
+			File sourceFile = new File(stringValue);
+			if (!sourceFile.isAbsolute() || !sourceFile.exists() || !sourceFile.isFile()) {
+				return false;
+			}
+
+			return super.doCheckState();
+		}
+		
 	}
 
     class WatchpointRangeFieldEditor extends IntegerFieldEditor {
@@ -824,7 +857,9 @@ public class CBreakpointPropertyPage extends FieldEditorPreferencePage implement
 
 		ICBreakpoint currentBp = getBreakpoint();
 		if (!(currentBp instanceof ICFunctionBreakpoint) &&
-				!(currentBp instanceof ICAddressBreakpoint)) {
+				!(currentBp instanceof ICAddressBreakpoint) &&
+				!(currentBp instanceof ICWatchpoint) &&
+				!(currentBp instanceof ICEventBreakpoint)) {
 			// Check for duplication of line breakpoints
 			if (event.getProperty().equals(FieldEditor.VALUE)) {
 				if (super.isValid()) {
@@ -861,7 +896,12 @@ public class CBreakpointPropertyPage extends FieldEditorPreferencePage implement
 			source = getPreferenceStore().getString(ICBreakpoint.SOURCE_HANDLE);
 		}
 		
-		int line = fLineEditor.getIntValue();
+		// We only check duplicates for Breakpoints with lines numbers
+		if (fLineEditor == null) {
+			return false;
+		}
+		
+ 		int line = fLineEditor.getIntValue();
 
 		// Look for any breakpoint that has the same source file and line number as what
 		// is currently being inputed.  Careful not to compare with the current breakpoint
@@ -922,6 +962,7 @@ public class CBreakpointPropertyPage extends FieldEditorPreferencePage implement
         return null;
 	}
 
+	@Override
 	public IPreferenceStore getPreferenceStore() {
 	    IAdaptable element = getElement();
 	    if (element instanceof ICBreakpointContext) {

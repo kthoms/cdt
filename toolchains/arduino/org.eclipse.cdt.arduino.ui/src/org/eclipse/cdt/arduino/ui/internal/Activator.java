@@ -10,6 +10,7 @@
  *******************************************************************************/
 package org.eclipse.cdt.arduino.ui.internal;
 
+import org.eclipse.cdt.arduino.core.internal.board.ArduinoManager;
 import org.eclipse.core.runtime.CoreException;
 import org.eclipse.core.runtime.IStatus;
 import org.eclipse.core.runtime.Status;
@@ -35,15 +36,21 @@ public class Activator extends AbstractUIPlugin {
 	public void start(BundleContext context) throws Exception {
 		super.start(context);
 		plugin = this;
-
-		ImageRegistry imageRegistry = getImageRegistry();
-		imageRegistry.put(IMG_ARDUINO, imageDescriptorFromPlugin(PLUGIN_ID, "icons/cprojects.gif")); //$NON-NLS-1$
-		imageRegistry.put(IMG_CONNECTION_TYPE, imageDescriptorFromPlugin(PLUGIN_ID, "icons/arduino.png")); //$NON-NLS-1$
+		// Load up the Arduino indices
+		ArduinoManager.instance.loadIndices();
 	}
 
 	public void stop(BundleContext context) throws Exception {
 		plugin = null;
 		super.stop(context);
+	}
+
+	@Override
+	protected ImageRegistry createImageRegistry() {
+		ImageRegistry registry = super.createImageRegistry();
+		registry.put(IMG_ARDUINO, imageDescriptorFromPlugin(PLUGIN_ID, "icons/cprojects.gif")); //$NON-NLS-1$
+		registry.put(IMG_CONNECTION_TYPE, imageDescriptorFromPlugin(PLUGIN_ID, "icons/arduino.png")); //$NON-NLS-1$
+		return registry;
 	}
 
 	/**

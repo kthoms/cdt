@@ -47,6 +47,7 @@ import org.eclipse.cdt.core.dom.ast.IParameter;
 import org.eclipse.cdt.core.dom.ast.ITypedef;
 import org.eclipse.cdt.core.dom.ast.IVariable;
 import org.eclipse.cdt.core.dom.ast.cpp.ICPPEnumeration;
+import org.eclipse.cdt.core.dom.ast.cpp.ICPPField;
 import org.eclipse.cdt.core.dom.ast.cpp.ICPPFunction;
 import org.eclipse.cdt.core.dom.ast.cpp.ICPPNamespace;
 import org.eclipse.cdt.core.dom.ast.cpp.ICPPVariable;
@@ -265,10 +266,11 @@ public class PDOM extends PlatformObject implements IPDOM {
 	 *  
 	 *  CDT 8.8 development (versions not supported on the 8.7.x branch)
 	 *  190.0 - Signature change for methods with ref-qualifiers, bug 470014.
+	 *  191.0 - Added EvalID.fIsPointerDeref, bug 472436.
 	 */
-	private static final int MIN_SUPPORTED_VERSION= version(190, 0);
-	private static final int MAX_SUPPORTED_VERSION= version(190, Short.MAX_VALUE);
-	private static final int DEFAULT_VERSION = version(190, 0);
+	private static final int MIN_SUPPORTED_VERSION= version(191, 0);
+	private static final int MAX_SUPPORTED_VERSION= version(191, Short.MAX_VALUE);
+	private static final int DEFAULT_VERSION = version(191, 0);
 
 	private static int version(int major, int minor) {
 		return (major << 16) + minor;
@@ -786,7 +788,7 @@ public class PDOM extends PlatformObject implements IPDOM {
 	private Boolean getCaseSensitive(Pattern[] patterns) {
 		Boolean caseSensitive= null;
 		for (Pattern p : patterns) {
-			switch(p.flags()) {
+			switch (p.flags()) {
 			case 0:
 				if (caseSensitive == Boolean.FALSE) {
 					return null;
@@ -1152,7 +1154,8 @@ public class PDOM extends PlatformObject implements IPDOM {
 		return null;
 	}
 
-	private IIndexFragmentBinding findBindingInLinkage(PDOMLinkage linkage, IBinding binding, boolean includeLocal) throws CoreException {
+	private IIndexFragmentBinding findBindingInLinkage(PDOMLinkage linkage, IBinding binding,
+			boolean includeLocal) throws CoreException {
 		if (binding instanceof IMacroBinding || binding instanceof IIndexMacroContainer) {
 			return linkage.findMacroContainer(binding.getNameCharArray());
 		}
@@ -1283,25 +1286,31 @@ public class PDOM extends PlatformObject implements IPDOM {
 	}
 
 	@Override
-	public IIndexFragmentBinding[] findBindingsForPrefix(char[] prefix, boolean filescope, IndexFilter filter, IProgressMonitor monitor) throws CoreException {
+	public IIndexFragmentBinding[] findBindingsForPrefix(char[] prefix, boolean filescope, IndexFilter filter,
+			IProgressMonitor monitor) throws CoreException {
 		return findBindingsForPrefix(prefix, filescope, false, filter, monitor);
 	}
 
-	public IIndexFragmentBinding[] findBindingsForPrefix(char[] prefix, boolean filescope, boolean caseSensitive, IndexFilter filter, IProgressMonitor monitor) throws CoreException {
+	public IIndexFragmentBinding[] findBindingsForPrefix(char[] prefix, boolean filescope, boolean caseSensitive,
+			IndexFilter filter, IProgressMonitor monitor) throws CoreException {
 		return findBindingsForPrefixOrContentAssist(prefix, filescope, false, caseSensitive, filter, monitor);
 	}
 
 	@Override
-	public IIndexFragmentBinding[] findBindingsForContentAssist(char[] prefix, boolean filescope, IndexFilter filter, IProgressMonitor monitor) throws CoreException {
+	public IIndexFragmentBinding[] findBindingsForContentAssist(char[] prefix, boolean filescope,
+			IndexFilter filter, IProgressMonitor monitor) throws CoreException {
 		return findBindingsForPrefixOrContentAssist(prefix, filescope, true, false, filter, monitor);
 	}
 
-	private IIndexFragmentBinding[] findBindingsForPrefixOrContentAssist(char[] prefix, boolean filescope, boolean isContentAssist, boolean caseSensitive, IndexFilter filter, IProgressMonitor monitor) throws CoreException {
+	private IIndexFragmentBinding[] findBindingsForPrefixOrContentAssist(char[] prefix, boolean filescope,
+			boolean isContentAssist, boolean caseSensitive, IndexFilter filter, IProgressMonitor monitor)
+			throws CoreException {
 		ArrayList<IIndexFragmentBinding> result= new ArrayList<>();
 		for (PDOMLinkage linkage : getLinkageList()) {
 			if (filter.acceptLinkage(linkage)) {
 				PDOMBinding[] bindings;
-				BindingCollector visitor = new BindingCollector(linkage, prefix, filter, !isContentAssist, isContentAssist, caseSensitive);
+				BindingCollector visitor =
+						new BindingCollector(linkage, prefix, filter, !isContentAssist, isContentAssist, caseSensitive);
 				visitor.setMonitor(monitor);
 				try {
 					linkage.accept(visitor);
@@ -1344,7 +1353,8 @@ public class PDOM extends PlatformObject implements IPDOM {
 					}
 
 					if (!isCaseSensitive || !filescope) {
-						BindingCollector visitor= new BindingCollector(linkage, name, filter, false, false, isCaseSensitive);
+						BindingCollector visitor=
+								new BindingCollector(linkage, name, filter, false, false, isCaseSensitive);
 						visitor.setMonitor(monitor);
 
 						if (!isCaseSensitive)
@@ -1368,12 +1378,14 @@ public class PDOM extends PlatformObject implements IPDOM {
 		return result.toArray(new IIndexFragmentBinding[result.size()]);
 	}
 
-	public IIndexFragmentBinding[] findMacroContainers(char[] prefix, boolean isPrefix, boolean isCaseSensitive, IndexFilter filter, IProgressMonitor monitor) throws CoreException {
+	public IIndexFragmentBinding[] findMacroContainers(char[] prefix, boolean isPrefix, boolean isCaseSensitive,
+			IndexFilter filter, IProgressMonitor monitor) throws CoreException {
 		ArrayList<IIndexFragmentBinding> result= new ArrayList<>();
 		try {
 			for (PDOMLinkage linkage : getLinkageList()) {
 				if (filter.acceptLinkage(linkage)) {
-					MacroContainerCollector visitor = new MacroContainerCollector(linkage, prefix, isPrefix, false, isCaseSensitive);
+					MacroContainerCollector visitor =
+							new MacroContainerCollector(linkage, prefix, isPrefix, false, isCaseSensitive);
 					visitor.setMonitor(monitor);
 					linkage.getMacroIndex().accept(visitor);
 					result.addAll(visitor.getMacroList());
@@ -1391,7 +1403,8 @@ public class PDOM extends PlatformObject implements IPDOM {
 		try {
 			for (PDOMLinkage linkage : getLinkageList()) {
 				if (filter.acceptLinkage(linkage)) {
-					MacroContainerCollector visitor = new MacroContainerCollector(linkage, prefix, isPrefix, false, isCaseSensitive);
+					MacroContainerCollector visitor =
+							new MacroContainerCollector(linkage, prefix, isPrefix, false, isCaseSensitive);
 					visitor.setMonitor(monitor);
 					linkage.getMacroIndex().accept(visitor);
 					for (PDOMMacroContainer mcont : visitor.getMacroList()) {
@@ -1501,7 +1514,7 @@ public class PDOM extends PlatformObject implements IPDOM {
 	}
 
 	private PDOMBinding[] getCrossLanguageBindings(IBinding binding) throws CoreException {
-		switch(binding.getLinkage().getLinkageID()) {
+		switch (binding.getLinkage().getLinkageID()) {
 		case ILinkage.C_LINKAGE_ID:
 			return getCPPBindingForC(binding);
 		case ILinkage.CPP_LINKAGE_ID:
@@ -1541,6 +1554,20 @@ public class PDOM extends PlatformObject implements IPDOM {
 				result = FindBinding.findBinding(c.getIndex(), c,
 						func.getNameCharArray(), new int[] { IIndexCBindingConstants.CFUNCTION }, 0);
 			}
+		} else if (binding instanceof ICPPField) {
+			ICPPField field = (ICPPField) binding;
+			IBinding parent = field.getCompositeTypeOwner();
+			PDOMBinding[] cOwners = getCBindingForCPP(parent);
+			List<PDOMBinding> results = new ArrayList<>();
+			for (PDOMBinding cOwner : cOwners) {
+				result = FindBinding.findBinding(cOwner, c,
+						field.getNameCharArray(), new int[] { IIndexCBindingConstants.CFIELD }, 0);
+				if (result != null) {
+					results.add(result);
+				}
+			}
+			return results.isEmpty() ? PDOMBinding.EMPTY_PDOMBINDING_ARRAY : results.toArray(new PDOMBinding[results.size()]);
+
 		} else if (binding instanceof ICPPVariable) {
 			ICPPVariable var = (ICPPVariable) binding;
 			if (var.isExternC()) {
@@ -1549,24 +1576,24 @@ public class PDOM extends PlatformObject implements IPDOM {
 			}
 		} else if (binding instanceof IEnumeration) {
 			result= FindBinding.findBinding(c.getIndex(), c,
-					binding.getNameCharArray(), new int[] {IIndexCBindingConstants.CENUMERATION }, 0);
+					binding.getNameCharArray(), new int[] { IIndexCBindingConstants.CENUMERATION }, 0);
 		} else if (binding instanceof IEnumerator) {
 			result= FindBinding.findBinding(c.getIndex(), c,
-					binding.getNameCharArray(), new int[] {IIndexCBindingConstants.CENUMERATOR }, 0);
+					binding.getNameCharArray(), new int[] { IIndexCBindingConstants.CENUMERATOR }, 0);
 		} else if (binding instanceof ITypedef) {
 			result= FindBinding.findBinding(c.getIndex(), c,
-					binding.getNameCharArray(), new int[] {IIndexCBindingConstants.CTYPEDEF }, 0);
+					binding.getNameCharArray(), new int[] { IIndexCBindingConstants.CTYPEDEF }, 0);
 		} else if (binding instanceof ICompositeType) {
 			final int key= ((ICompositeType) binding).getKey();
 			if (key == ICompositeType.k_struct || key == ICompositeType.k_union) {
 				result= FindBinding.findBinding(c.getIndex(), c,
-					binding.getNameCharArray(), new int[] {IIndexCBindingConstants.CSTRUCTURE }, 0);
+					binding.getNameCharArray(), new int[] { IIndexCBindingConstants.CSTRUCTURE }, 0);
 				if (result instanceof ICompositeType && ((ICompositeType) result).getKey() != key) {
 					result= null;
 				}
 			}
 		}
-		return result == null ? PDOMBinding.EMPTY_PDOMBINDING_ARRAY : new PDOMBinding[] {result};
+		return result == null ? PDOMBinding.EMPTY_PDOMBINDING_ARRAY : new PDOMBinding[] { result };
 	}
 
 	private PDOMBinding[] getCPPBindingForC(IBinding binding) throws CoreException {
@@ -1574,6 +1601,7 @@ public class PDOM extends PlatformObject implements IPDOM {
 		if (cpp == null) {
 			return PDOMBinding.EMPTY_PDOMBINDING_ARRAY;
 		}
+		PDOMBinding[] cppOwners = null;
 		IndexFilter filter= null;
 		if (binding instanceof IFunction) {
 			filter= new IndexFilter() {
@@ -1585,6 +1613,12 @@ public class PDOM extends PlatformObject implements IPDOM {
 					return false;
 				}
 			};
+		} else if (binding instanceof IField) {
+			IBinding compOwner = ((IField) binding).getCompositeTypeOwner();
+			cppOwners = getCPPBindingForC(compOwner);
+			if (cppOwners.length > 0) {
+				filter = IndexFilter.ALL;
+			}
 		} else if (binding instanceof IVariable) {
 			if (!(binding instanceof IField) && !(binding instanceof IParameter)) {
 				filter= new IndexFilter() {
@@ -1631,8 +1665,15 @@ public class PDOM extends PlatformObject implements IPDOM {
 			};
 		}
 		if (filter != null) {
-			BindingCollector collector= new BindingCollector(cpp, binding.getNameCharArray(), filter, false, false, true);
-			cpp.accept(collector);
+			BindingCollector collector=
+					new BindingCollector(cpp, binding.getNameCharArray(), filter, false, false, true);
+			if (cppOwners != null) {
+				for (PDOMBinding owner : cppOwners) {
+					owner.accept(collector);
+				}
+			} else {
+				cpp.accept(collector);
+			}
 			return collector.getBindings();
 		}
 		return PDOMBinding.EMPTY_PDOMBINDING_ARRAY;
